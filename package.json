@@ -1,0 +1,7 @@
+{
+  "name": "spartan300-v0.1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "node server.mjs", "start": "node server.mjs", "check": "node --check app.js && node --check admin.js && node --check viewport.js && node --check backend.mjs && node --check server.mjs", "test": "node --test tests/*.test.mjs" }
+}

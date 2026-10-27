@@ -1,0 +1,15 @@
+node_modules/
+.DS_Store
+*.log
+.server.pid
+artifacts/
+
+.data/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pid
