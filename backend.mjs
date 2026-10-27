@@ -1,5 +1,6 @@
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
+import { createBounties } from './bounties.mjs';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 
 const LEGACY_HASH = text => { let n = 2166136261; for (const c of text) n = Math.imul(n ^ c.charCodeAt(0), 16777619); return (n >>> 0).toString(16); };
@@ -36,10 +37,11 @@ function seedDatabase() {
   return database;
 }
 
-export async function createBackend({ dataPath, adminPassword = process.env.SPARTAN_ADMIN_PASSWORD || 'spartan300-admin' }) {
+export async function createBackend({ dataPath, adminPassword = process.env.SPARTAN_ADMIN_PASSWORD || 'spartan300-admin', now = Date.now }) {
   let database;
   try { database = JSON.parse(await readFile(dataPath, 'utf8')); if (database.version !== 1 || !Array.isArray(database.users) || !Array.isArray(database.settlements) || !Array.isArray(database.audit)) throw new Error('本地数据文件格式不正确，原文件已保留'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; database = seedDatabase(); await mkdir(path.dirname(dataPath), { recursive: true }); await writeFile(dataPath, JSON.stringify(database, null, 2), { mode: 0o600 }); }
+  database.bounties ||= []; database.bountyClaims ||= [];
   let queue = Promise.resolve();
   const sessions = new Map();
   const adminSecret = passwordRecord(adminPassword);
@@ -58,6 +60,7 @@ export async function createBackend({ dataPath, adminPassword = process.env.SPAR
     queue = operation.catch(() => {});
     return operation;
   };
+  const bounties = createBounties({ getDatabase: () => database, transact, audit, now });
   const publicUser = user => {
     const { password, legacyDigest, ...rest } = user;
     return { ...rest, balance: yuan(user.balanceCents), total: yuan(user.totalEarnedCents), pending: yuan(database.settlements.filter(s => s.userId === user.id && s.status === 'pending').reduce((a, s) => a + s.amountCents, 0)), paid: yuan(user.totalPaidCents) };
@@ -113,7 +116,7 @@ export async function createBackend({ dataPath, adminPassword = process.env.SPAR
     const settlements = database.settlements.map(s => ({ ...publicSettlement(s), user: users.find(u => u.id === s.userId) }));
     const pending = settlements.filter(s => s.status === 'pending');
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
-    return { demo: true, updatedAt: iso(), users, settlements: settlements.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), audit: database.audit.slice(0, 300), stats: { userCount: users.length, activeCount: users.filter(u => u.status === 'active').length, pendingCount: pending.length, pendingAmount: pending.reduce((a, s) => a + s.amount, 0), paidAmount: users.reduce((a, u) => a + u.paid, 0), paidCount: settlements.filter(s => s.status === 'paid').length, availableAmount: users.reduce((a, u) => a + u.balance, 0), todayCount: settlements.filter(s => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(s.createdAt)) === today).length } };
+    return { demo: true, updatedAt: iso(), ...bounties.adminSnapshot(), users, settlements: settlements.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), audit: database.audit.slice(0, 300), stats: { userCount: users.length, activeCount: users.filter(u => u.status === 'active').length, pendingCount: pending.length, pendingAmount: pending.reduce((a, s) => a + s.amount, 0), paidAmount: users.reduce((a, u) => a + u.paid, 0), paidCount: settlements.filter(s => s.status === 'paid').length, availableAmount: users.reduce((a, u) => a + u.balance, 0), todayCount: settlements.filter(s => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(s.createdAt)) === today).length } };
   };
 
   return {
@@ -122,6 +125,7 @@ export async function createBackend({ dataPath, adminPassword = process.env.SPAR
       try {
         const route = url.pathname;
         const method = req.method;
+        if (route === '/api/admin/snapshot' || route.includes('/bounties')) await bounties.expire();
         if (method === 'POST' && route === '/api/admin/login') {
           limitLogin(req); const body = await readBody(req);
           if (body.username !== 'admin' || !passwordMatches(String(body.password || ''), adminSecret)) fail(401, '管理员账号或密码不正确');
@@ -130,6 +134,8 @@ export async function createBackend({ dataPath, adminPassword = process.env.SPAR
         if (method === 'POST' && route === '/api/admin/logout') { await readBody(req); logout(req, res, 'admin'); send(res, 200, { ok: true }); return true; }
         if (route.startsWith('/api/admin/')) {
           sessionFor(req, 'admin');
+          const bountyReview = route.match(/^\/api\/admin\/bounties\/([^/]+)\/review$/);
+          if (method === 'POST' && bountyReview) { send(res, 200, await bounties.review(bountyReview[1], await readBody(req))); return true; }
           if (method === 'GET' && route === '/api/admin/snapshot') { send(res, 200, adminSnapshot()); return true; }
           if (method === 'POST' && route === '/api/admin/users') {
             const body = await readBody(req); const phone = clean(body.phone, 11), password = String(body.password || '');
@@ -166,6 +172,10 @@ export async function createBackend({ dataPath, adminPassword = process.env.SPAR
         if (method === 'POST' && route === '/api/auth/logout') { await readBody(req); logout(req, res, 'user'); send(res, 200, { ok: true }); return true; }
         if (route.startsWith('/api/me')) {
           const current = sessionFor(req, 'user');
+          if (method === 'GET' && route === '/api/me/bounties') { send(res, 200, bounties.snapshot(current.id)); return true; }
+          if (method === 'POST' && route === '/api/me/bounties/claim') { send(res, 200, await bounties.claim(current.id, await readBody(req))); return true; }
+          const bountyAction = route.match(/^\/api\/me\/bounties\/([^/]+)\/(start|submit)$/);
+          if (method === 'POST' && bountyAction) { const body = await readBody(req); send(res, 200, bountyAction[2] === 'start' ? await bounties.start(current.id, bountyAction[1]) : await bounties.submit(current.id, bountyAction[1], body)); return true; }
           if (method === 'GET' && route === '/api/me') { send(res, 200, userResult(current)); return true; }
           if (method === 'POST' && route === '/api/me/activity') {
             const body = await readBody(req); await transact(db => { db.users.find(u => u.id === current.id).recordCount = Math.max(0, Math.min(10000, Math.floor(Number(body.recordCount) || 0))); }); send(res, 200, { ok: true }); return true;

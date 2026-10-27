@@ -16,7 +16,7 @@ function harness() {
   return {run,el,click,submit,storage,intervals};
 }
 
-test('three answers authorize exactly one recording; preflight and refresh cannot restore consumed permit',async()=>{
+test('three answers open a six-hour window that survives retakes and refresh',async()=>{
   const h=harness();
   h.run('openShoot()'); assert.equal(h.run('media'),null);
   await h.run("send('专业厨艺：手工拆骨和精细刀工工序')"); assert.equal(h.run('state.permit'),null);
@@ -24,9 +24,8 @@ test('three answers authorize exactly one recording; preflight and refresh canno
   await h.run("send('刀具、砧板，手机头戴支架，可以边操作边讲解录音')"); assert.ok(h.run('state.permit.id'));
   h.run('openShoot();startRecording()'); assert.equal(h.run('media.recording'),false); assert.ok(h.run('state.permit'));
   h.el('#mic-confirm').checked=true;h.el('#landscape-confirm').checked=true;
-  h.run('startRecording()'); assert.equal(h.run('media.recording'),true);assert.equal(h.run('state.permit'),null);
-  assert.throws(()=>h.run('consumePermit()'),/授权已失效/);
-  h.run('load()');assert.equal(h.run('state.permit'),null);assert.equal(h.run('state.records[0].status'),'interrupted');
+  const expires=h.run('state.permit.expiresAt');h.run('startRecording()');assert.equal(h.run('media.recording'),true);assert.ok(h.run('state.permit'));
+  h.run('load()');assert.equal(h.run('state.permit.expiresAt'),expires);assert.equal(h.run('state.records[0].status'),'interrupted');
 });
 
 test('unsafe or silent brief fails evaluation and grants no permit',async()=>{
@@ -35,18 +34,19 @@ test('unsafe or silent brief fails evaluation and grants no permit',async()=>{
 });
 
 test('offline simulation saves pending chunks; retry waits for review without crediting income',async()=>{
-  const h=harness();h.run("state.permit={id:'p',title:'测试拍摄'};openShoot()");
+  const h=harness();h.run("claimBounty('测试拍摄',[]);openShoot()");
   h.el('#mic-confirm').checked=true;h.el('#landscape-confirm').checked=true;
   h.run('media.offline=true;startRecording();media.start=Date.now()-12000');
   await h.run('finishRecording()'); await Promise.resolve();
-  assert.equal(h.run('state.records[0].status'),'cached');assert.equal(h.run('state.records[0].chunks'),3);
+  assert.equal(h.run('state.records[0].status'),'draft');assert.equal(h.run('state.records[0].chunks'),3);
+  const draftId=h.run('state.records[0].id');await h.run(`uploadRecord(${JSON.stringify(draftId)})`);assert.equal(h.run('state.records[0].status'),'cached');
   const id=h.run('state.records[0].id');await h.click({retry:id});assert.equal(h.run('state.records[0].status'),'review');
   await h.click({approve:id});await h.click({approve:id});assert.equal(h.run('state.records[0].status'),'review');assert.equal(h.run('state.balance'),400);assert.equal(h.run('state.records[0].amount'),0);
   assert.equal(h.run('state.permit'),null);
 });
 
 test('recording timer stops at 30 minutes',async()=>{
-  const h=harness();h.run("state.permit={id:'p',title:'测试'};openShoot()");h.el('#mic-confirm').checked=true;h.el('#landscape-confirm').checked=true;
+  const h=harness();h.run("claimBounty('测试',[]);openShoot()");h.el('#mic-confirm').checked=true;h.el('#landscape-confirm').checked=true;
   h.run('startRecording();media.start=Date.now()-1801000');h.intervals[0]();await Promise.resolve();await Promise.resolve();
   assert.equal(h.run('state.records[0].duration'),1800);assert.equal(h.run('media'),null);
 });
@@ -58,7 +58,7 @@ test('settlement always requests full balance and duplicate submits or cancellat
 });
 
 test('real recording cannot start without available camera and microphone',()=>{
-  const h=harness();h.run("state.permit={id:'p',title:'测试'};openShoot();media.mode='real'");h.el('#mic-confirm').checked=true;h.el('#landscape-confirm').checked=true;
+  const h=harness();h.run("claimBounty('测试',[]);openShoot();media.mode='real'");h.el('#mic-confirm').checked=true;h.el('#landscape-confirm').checked=true;
   h.run('startRecording()');assert.equal(h.run('media.recording'),false);assert.ok(h.run('state.permit'));
 });
 
@@ -78,4 +78,16 @@ test('earlier generic demo is backed up and migrated without losing account or c
   const h=harness();h.run("state={...seed(),contentVersion:undefined,balance:286,total:286,messages:[{role:'user',text:'城市街景'}],permit:{id:'old'},brief:['街景']};state.records[1].amount=158;state.records[2].amount=128;state.records.push({id:'custom',title:'早期测试',amount:0,status:'local'});save();load()");
   assert.equal(h.run('state.balance'),400);assert.equal(h.run('state.messages.length'),0);assert.equal(h.run('state.permit'),null);assert.equal(h.run('state.records.at(-1).id'),'custom');
   assert.equal(h.run('read(`s300-before-expert-${phone}`,null).balance'),286);
+});
+
+test('finishing does not upload; discarding keeps the same window for a retake',async()=>{
+  const h=harness();h.run("claimBounty('专业皮具缝制',[]);openShoot()");const expires=h.run('state.permit.expiresAt'),claimId=h.run('state.permit.id');h.el('#mic-confirm').checked=true;h.el('#landscape-confirm').checked=true;
+  await h.run('startRecording()');await h.run('finishRecording()');await Promise.resolve();assert.equal(h.run('state.records[0].status'),'draft');assert.equal(h.run('state.permit.id'),claimId);
+  const id=h.run('state.records[0].id');await h.click({discardRecord:id});assert.equal(h.run('state.records[0].status'),'discarded');assert.equal(h.run('state.permit.expiresAt'),expires);
+  await h.run(`resumeBounty(${JSON.stringify(claimId)})`);assert.ok(h.run('media'));assert.equal(h.run('media.permitId'),claimId);assert.equal(h.run('state.permit.expiresAt'),expires);
+});
+
+test('an expired window blocks starting and uploading a saved draft',async()=>{
+  const h=harness();h.run("claimBounty('测试手艺',[]);state.permit.expiresAt=new Date(Date.now()-1).toISOString();openShoot()");assert.equal(h.run('media'),null);
+  h.run("state.records.unshift({id:'expired-draft',claimId:state.permit.id,status:'draft',simulated:true,duration:10,chunks:2});");await h.run("uploadRecord('expired-draft')");assert.equal(h.run('state.records[0].status'),'draft');
 });

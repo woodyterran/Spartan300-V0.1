@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createBackend } from './backend.mjs';
+import { mobileEntry } from './mobile-entry.mjs';
 import { readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { networkInterfaces } from 'node:os';
@@ -22,6 +23,11 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/api/mobile-entry' && req.method === 'GET') {
+    try { const entry = mobileEntry({ wifi: wifiAddress(), destination: url.searchParams.get('destination') }); res.writeHead(200, {'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(entry)); }
+    catch(error) { res.writeHead(error.status || 500, {'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify({error:error.message})); }
+    return;
+  }
   if (await backend.handle(req, res, url)) return;
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end('Method not allowed'); return; }
   if (url.pathname === '/api/health') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true, app: 'Spartan300', version: '0.1.0', host: '0.0.0.0', port: 3000, wifi: wifiAddress(), backend: 'local-demo-json', settlementBackend: true })); return; }
