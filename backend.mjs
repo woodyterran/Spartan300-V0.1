@@ -1,6 +1,7 @@
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { createBounties } from './bounties.mjs';
+import { codespacesOrigin } from './codespaces.mjs';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 
 const LEGACY_HASH = text => { let n = 2166136261; for (const c of text) n = Math.imul(n ^ c.charCodeAt(0), 16777619); return (n >>> 0).toString(16); };
@@ -37,7 +38,7 @@ function seedDatabase() {
   return database;
 }
 
-export async function createBackend({ dataPath, adminPassword = process.env.SPARTAN_ADMIN_PASSWORD || 'spartan300-admin', now = Date.now }) {
+export async function createBackend({ dataPath, adminPassword = process.env.SPARTAN_ADMIN_PASSWORD || 'spartan300-admin', now = Date.now, publicOrigin = codespacesOrigin() }) {
   let database;
   try { database = JSON.parse(await readFile(dataPath, 'utf8')); if (database.version !== 1 || !Array.isArray(database.users) || !Array.isArray(database.settlements) || !Array.isArray(database.audit)) throw new Error('本地数据文件格式不正确，原文件已保留'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; database = seedDatabase(); await mkdir(path.dirname(dataPath), { recursive: true }); await writeFile(dataPath, JSON.stringify(database, null, 2), { mode: 0o600 }); }
@@ -82,7 +83,8 @@ export async function createBackend({ dataPath, adminPassword = process.env.SPAR
   const readBody = async req => {
     if (!String(req.headers['content-type'] || '').startsWith('application/json')) fail(415, '请使用 JSON 请求');
     const hostname = new URL(`http://${req.headers.host}`).hostname;
-    if (!/^(localhost|127\.0\.0\.1|\[::1\]|10\.[\d.]+|192\.168\.[\d.]+|172\.(1[6-9]|2\d|3[01])\.[\d.]+)$/.test(hostname)) fail(403, '仅支持本机或局域网访问');
+    const codespaceHost = publicOrigin && req.headers.host === new URL(publicOrigin).host;
+    if (!codespaceHost && !/^(localhost|127\.0\.0\.1|\[::1\]|10\.[\d.]+|192\.168\.[\d.]+|172\.(1[6-9]|2\d|3[01])\.[\d.]+)$/.test(hostname)) fail(403, '仅支持本机、局域网或当前 Codespace 访问');
     const origin = req.headers.origin;
     if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) fail(403, '请求来源不匹配');
     let raw = ''; for await (const chunk of req) { raw += chunk; if (Buffer.byteLength(raw) > 524288) fail(413, '请求内容过大'); }

@@ -1,0 +1,11 @@
+{
+  "name": "Spartan300 development",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22-bookworm",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "Spartan300", "onAutoForward": "notify" }
+  },
+  "postCreateCommand": "npm run check && npm test",
+  "postStartCommand": "nohup npm run dev > /tmp/spartan300-dev.log 2>&1 &",
+  "remoteUser": "node"
+}

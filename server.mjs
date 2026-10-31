@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { createBackend } from './backend.mjs';
 import { mobileEntry } from './mobile-entry.mjs';
+import { codespacesOrigin } from './codespaces.mjs';
 import { readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { networkInterfaces } from 'node:os';
@@ -8,7 +9,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const publicOrigin = codespacesOrigin();
 function wifiAddress() {
+  if (process.platform !== 'darwin') return null;
   try {
     const ports = execFileSync('/usr/sbin/networksetup', ['-listallhardwareports'], { encoding: 'utf8' });
     const device = ports.match(/Hardware Port: (?:Wi-Fi|AirPort)\nDevice: (\S+)/)?.[1];
@@ -24,7 +27,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/mobile-entry' && req.method === 'GET') {
-    try { const entry = mobileEntry({ wifi: wifiAddress(), destination: url.searchParams.get('destination') }); res.writeHead(200, {'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(entry)); }
+    try { const entry = mobileEntry({ wifi: publicOrigin ? null : wifiAddress(), publicOrigin, destination: url.searchParams.get('destination') }); res.writeHead(200, {'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(entry)); }
     catch(error) { res.writeHead(error.status || 500, {'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify({error:error.message})); }
     return;
   }
@@ -44,6 +47,7 @@ server.on('error', err => { console.error(err.code === 'EADDRINUSE' ? 'Port 3000
 server.listen(3000, '0.0.0.0', () => {
   console.log('Spartan300 V0.1 — local prototype');
   console.log('Local: http://localhost:3000');
+  if (publicOrigin) console.log(`Codespaces: ${publicOrigin}`);
   const wifi = wifiAddress();
   console.log(wifi ? `${wifi.verifiedWifi ? 'Wi-Fi' : 'Network (Wi-Fi unverified)'} (${wifi.interface}): http://${wifi.address}:3000` : 'No active LAN IPv4 detected');
   console.log('Admin: http://localhost:3000/admin');

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
+import { codespacesOrigin } from '../codespaces.mjs';
 import { mobileEntry } from '../mobile-entry.mjs';
 
 const source=await readFile(new URL('../app.js',import.meta.url),'utf8');
@@ -36,4 +37,19 @@ test('phones and touch iPads keep the existing mobile login flow',()=>{
 test('scanned links keep the intended mobile destination through login',()=>{
   const h=desktopHarness('iPhone Mobile','iPhone',5,'?continue=records');assert.equal(h.run('tab'),'records');assert.match(h.el('#app').innerHTML,/id="auth-form"/);
   const register=desktopHarness('Android Mobile','Linux arm',5,'?continue=register');assert.equal(register.run('authMode'),'register');
+});
+
+
+test('Codespaces QR uses the HTTPS URL from the environment without requiring Mac Wi-Fi', () => {
+  const env = {CODESPACES:'true', CODESPACE_NAME:'test-space', GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:'app.github.dev'};
+  const publicOrigin = codespacesOrigin(env);
+  assert.equal(publicOrigin, 'https://test-space-3000.app.github.dev');
+  const entry = mobileEntry({publicOrigin, destination:'records'});
+  assert.equal(entry.url, publicOrigin+'/?continue=records');
+  assert.equal(entry.localNetwork, false);
+  assert.match(entry.qrSvg, /^<svg/);
+  assert.equal(codespacesOrigin({}), null);
+  assert.throws(() => codespacesOrigin({...env, CODESPACE_NAME:'bad/name'}));
+  assert.throws(() => codespacesOrigin({...env, GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:'app.github.dev/evil'}));
+  assert.throws(() => codespacesOrigin({CODESPACES:'true'}));
 });

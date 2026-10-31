@@ -30,6 +30,21 @@ npm run dev
 - `/admin`：配套 PC 结算管理后台。
 - `/api/health`：只读服务状态与当前 Wi-Fi 地址。
 
+## 在 GitHub Codespaces 中继续开发
+
+1. 在 GitHub 仓库选择 `codex/dev-2026-10-31` 分支，再打开 **Code → Codespaces → Create codespace on codex/dev-2026-10-31**。
+2. 环境使用 Node.js 22，首次创建会执行语法检查与测试，启动后自动运行开发服务。
+3. 在编辑器底部 **Ports（端口）** 中打开 `3000` 的转发地址。保持端口为 **Private**；手机扫码后需在浏览器登录创建 Codespace 的同一 GitHub 账号，无需与 Mac 连接同一 Wi-Fi。
+4. 编辑代码后，在云端终端停止旧服务并重新运行 `npm run dev`；提交并推送代码后，其他电脑才能通过 GitHub 获取这些改动。
+
+云端地址依据 GitHub 提供的 `CODESPACE_NAME` 与 `GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN` 自动生成；登录及二维码均支持当前 Codespace 的 HTTPS 地址。本地 Mac 仍使用原有局域网流程。真实摄像头还取决于手机浏览器权限与设备支持，请在手机浏览器直接打开预览地址。
+
+如果预览没有启动，查看 `/tmp/spartan300-dev.log`，或在终端运行 `npm run dev`。默认自动启动不包含文件热更新；重启服务后刷新页面查看修改。
+
+`.data/`、截图与本地视频均不随 Git 同步。新 Codespace 默认初始化独立演示数据，Mac 原有数据保留。需沿用旧账号与结算记录时，单独备份并传入 `.data/store.json`，在服务停止时替换，勿将其提交到 GitHub。Codespace 内的 `.data/` 位于项目目录，删除 Codespace 前须单独备份；浏览器里的真实视频需在原浏览器导出。
+
+Codespaces 是开发环境，停止后预览不可用。用完可在 GitHub Codespaces 页面停止实例；配额和计费以 GitHub 账户页面为准。
+
 ## 演示账号
 
 - 手机号：`13800138000`

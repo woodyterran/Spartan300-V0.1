@@ -6,16 +6,16 @@ import path from 'node:path';
 import os from 'node:os';
 import { createBackend } from '../backend.mjs';
 
-async function fixture(t, existingPath, now) {
+async function fixture(t, existingPath, now, options = {}) {
   const directory=existingPath?path.dirname(existingPath):await mkdtemp(path.join(os.tmpdir(),'spartan-admin-test-'));
   const dataPath=existingPath || path.join(directory,'store.json');
-  const backend=await createBackend({dataPath, ...(now?{now}:{})});
+  const backend=await createBackend({dataPath, ...(now?{now}:{}), ...options});
   const server=http.createServer(async(req,res)=>{if(!await backend.handle(req,res,new URL(req.url,'http://localhost'))){res.writeHead(404);res.end();}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base=`http://127.0.0.1:${server.address().port}`;
   const client=()=>{let cookie='';return async(route,method='GET',body,origin=base)=>{const response=await fetch(base+route,{method,headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const received=response.headers.getSetCookie();if(received.length)cookie=received.map(c=>c.split(';')[0]).join('; ');return {status:response.status,body:await response.json()};};};
   t.after(async()=>{await new Promise(resolve=>server.close(resolve));if(!existingPath)await rm(directory,{recursive:true,force:true});});
-  return {client,dataPath};
+  return {client,dataPath,base};
 }
 async function loginUser(client,phone='13800138000'){const result=await client('/api/auth/login','POST',{phone,password:'spartan300'});assert.equal(result.status,200);return result.body;}
 async function loginAdmin(client){const result=await client('/api/admin/login','POST',{username:'admin',password:'spartan300-admin'});assert.equal(result.status,200);}
@@ -159,4 +159,24 @@ test('bounty ownership and deadline survive server restart',async t=>{
 test('normalized task titles share one lock and cannot acquire a new deadline',async t=>{
   const f=await fixture(t),a=f.client(),b=f.client();await loginUser(a);await loginUser(b,'18600001001');const first=(await claimTask(a,'专业 手艺：榫卯修配')).body.claims[0];
   const repeated=(await claimTask(a,'专业手艺榫卯修配')).body.claims[0];assert.equal(repeated.id,first.id);assert.equal(repeated.expiresAt,first.expiresAt);assert.equal((await claimTask(b,'专业手艺榫卯修配')).status,409);
+});
+
+
+test('Codespaces login allows only the configured host and matching origin', async t => {
+  const publicOrigin = 'https://test-space-3000.app.github.dev';
+  const f = await fixture(t, undefined, undefined, {publicOrigin});
+  const credentials = {phone:'13800138000',password:'spartan300'};
+  const request = (base, host, origin, extra={}) => new Promise((resolve,reject) => {
+    const req = http.request(base+'/api/auth/login', {method:'POST',headers:{'Content-Type':'application/json',Host:host,Origin:origin,...extra}}, res => {
+      res.resume();res.on('end',()=>resolve(res.statusCode));
+    });
+    req.on('error',reject);req.end(JSON.stringify(credentials));
+  });
+  const login = (host, origin, extra={}) => request(f.base,host,origin,extra);
+  assert.equal(await login('test-space-3000.app.github.dev', publicOrigin),200);
+  assert.equal(await login('test-space-3000.app.github.dev', 'https://unrelated.example'),403);
+  assert.equal(await login('other-space-3000.app.github.dev', 'https://other-space-3000.app.github.dev'),403);
+  assert.equal(await login('unrelated.example', 'https://unrelated.example', {'X-Forwarded-Host':'test-space-3000.app.github.dev'}),403);
+  const local = await fixture(t, undefined, undefined, {publicOrigin:null});
+  assert.equal(await request(local.base,'test-space-3000.app.github.dev',publicOrigin),403);
 });
